@@ -34,16 +34,11 @@ import com.google.api.services.vision.v1.model.EntityAnnotation;
 import com.google.api.services.vision.v1.model.Feature;
 import com.google.api.services.vision.v1.model.Image;
 
-import org.w3c.dom.Text;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 
 import static android.os.Environment.getExternalStoragePublicDirectory;
 
@@ -52,7 +47,8 @@ public class MainActivity extends Activity {
     private Button takePictureButton;
     private ImageView mImageView;
     private TextView mImageDetails;
-    String mCurrentPhotoPath;
+    private String message;
+    ArrayList<String> descriptions = new ArrayList<String>();
     private static final String TAG = MainActivity.class.getSimpleName();
     private static final String CLOUD_VISION_API_KEY = "AIzaSyALSUzhWBHyobICZIYptL5QUfMEiCI7uvI";
     private static final String ANDROID_CERT_HEADER = "X-Android-Cert";
@@ -228,7 +224,8 @@ public class MainActivity extends Activity {
                     Log.d(TAG, "created Cloud Vision request object, sending request");
 
                     BatchAnnotateImagesResponse response = annotateRequest.execute();
-                    return convertResponseToString(response);
+                    convertResponse(response);
+                    return message;
 
                 } catch (GoogleJsonResponseException e) {
                     Log.d(TAG, "failed to make API request because " + e.getContent());
@@ -240,25 +237,24 @@ public class MainActivity extends Activity {
             }
 
             protected void onPostExecute(String result) {
-                mImageDetails.setText(result);
+                mImageDetails.setText(message);
             }
         }.execute();
     }
 
-    private String convertResponseToString(BatchAnnotateImagesResponse response) {
-        String message = "I found these things:\n\n";
+    private void convertResponse(BatchAnnotateImagesResponse response) {
+
+
 
         List<EntityAnnotation> labels = response.getResponses().get(0).getLabelAnnotations();
         if (labels != null) {
             for (EntityAnnotation label : labels) {
-                message += String.format(Locale.US, "%.3f: %s", label.getScore(), label.getDescription());
-                message += "\n";
+                descriptions.add(label.getDescription());
             }
         } else {
-            message += "nothing";
         }
 
-        return message;
+        return;
     }
 
 }
