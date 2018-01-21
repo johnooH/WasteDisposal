@@ -6,22 +6,44 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.content.FileProvider;
-import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.TextView;
 
+import com.google.api.client.extensions.android.http.AndroidHttp;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.http.HttpTransport;
+import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.vision.v1.Vision;
+import com.google.api.services.vision.v1.VisionRequest;
+import com.google.api.services.vision.v1.VisionRequestInitializer;
+import com.google.api.services.vision.v1.model.AnnotateImageRequest;
+import com.google.api.services.vision.v1.model.BatchAnnotateImagesRequest;
+import com.google.api.services.vision.v1.model.BatchAnnotateImagesResponse;
+import com.google.api.services.vision.v1.model.EntityAnnotation;
+import com.google.api.services.vision.v1.model.Feature;
+import com.google.api.services.vision.v1.model.Image;
+
+import org.w3c.dom.Text;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 import static android.os.Environment.getExternalStoragePublicDirectory;
 
@@ -29,8 +51,13 @@ public class MainActivity extends Activity {
 
     private Button takePictureButton;
     private ImageView mImageView;
+    private TextView mImageDetails;
     String mCurrentPhotoPath;
-
+    private static final String TAG = MainActivity.class.getSimpleName();
+    private static final String CLOUD_VISION_API_KEY = "AIzaSyALSUzhWBHyobICZIYptL5QUfMEiCI7uvI";
+    private static final String ANDROID_CERT_HEADER = "X-Android-Cert";
+    private static final String ANDROID_PACKAGE_HEADER = "X-Android-Package";
+    static final int REQUEST_IMAGE_CAPTURE = 1;
     static final int REQUEST_TAKE_PHOTO = 1;
 
     @Override
@@ -40,6 +67,7 @@ public class MainActivity extends Activity {
 
         takePictureButton = (Button) findViewById(R.id.button_image);
         mImageView = (ImageView) findViewById(R.id.imageview);
+        mImageDetails = (TextView) findViewById(R.id.textDetails);
 
         takePictureButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -53,27 +81,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    static final int REQUEST_IMAGE_CAPTURE = 1;
+
 
     private void takePicture() {
         Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         // Ensure that there's a camera activity to handle the intent
         if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
             // Create the File where the photo should go
-            File photoFile = null;
-            try {
-                photoFile = createImageFile();
-            } catch (IOException ex) {
-                // Error occurred while creating the File
-            }
-            // Continue only if the File was successfully created
-            if (photoFile != null) {
-                Uri photoURI = FileProvider.getUriForFile(this,
-                        "com.example.android.fileprovider",
-                        photoFile);
-                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
-                startActivityForResult(takePictureIntent, REQUEST_TAKE_PHOTO);
-            }
+            Uri photoURI = FileProvider.getUriForFile(this,
+                    "com.example.android.fileprovider",
+                    createImageFile());
+            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+            startActivityForResult(takePictureIntent, REQUEST_TAKE_PHOTO);
         }
     }
 
@@ -81,33 +100,165 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         try {
             if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
-                Log.d("testing", "Line0 completed");
-                Bundle extras = data.getExtras();
-                Log.d("testing", "Line1 completed");
-                Bitmap imageBitmap = (Bitmap) extras.get("data");
-                Log.d("testing", "Line2 completed");
-                mImageView.setImageBitmap(imageBitmap);
-                Log.d("testing", "Line3 completed");
+                Uri photoURI = FileProvider.getUriForFile(this,
+                        "com.example.android.fileprovider",
+                        createImageFile());
+                uploadImage(photoURI);
             }
         } catch (Exception ex) {
             Log.d("Error:", "You suck");
         }
+
     }
 
-    private File createImageFile() throws IOException {
+    private File createImageFile() {
         // Create an image file name
-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        String imageFileName = "JPEG_" + timeStamp + "_";
         File storageDir = getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
-        File image = File.createTempFile(
-                imageFileName,  /* prefix */
-                ".jpg",         /* suffix */
-                storageDir      /* directory */
-        );
+        return new File(storageDir, "temp.jpg");
+    }
 
-        // Save a file: path for use with ACTION_VIEW intents
-        mCurrentPhotoPath = image.getAbsolutePath();
-        return image;
+    public void uploadImage(Uri uri) {
+        if (uri != null) {
+            try {
+                // scale the image to save on bandwidth
+                Bitmap bitmap =
+                        scaleBitmapDown(
+                                MediaStore.Images.Media.getBitmap(getContentResolver(), uri),
+                                1200);
+
+                callCloudVision(bitmap);
+                mImageView.setImageBitmap(bitmap);
+
+            } catch (IOException e) {
+            }
+        } else {
+            Log.d(TAG, "Image picker gave us a null image.");
+        }
+    }
+
+    public Bitmap scaleBitmapDown(Bitmap bitmap, int maxDimension) {
+
+        int originalWidth = bitmap.getWidth();
+        int originalHeight = bitmap.getHeight();
+        int resizedWidth = maxDimension;
+        int resizedHeight = maxDimension;
+
+        if (originalHeight > originalWidth) {
+            resizedHeight = maxDimension;
+            resizedWidth = (int) (resizedHeight * (float) originalWidth / (float) originalHeight);
+        } else if (originalWidth > originalHeight) {
+            resizedWidth = maxDimension;
+            resizedHeight = (int) (resizedWidth * (float) originalHeight / (float) originalWidth);
+        } else if (originalHeight == originalWidth) {
+            resizedHeight = maxDimension;
+            resizedWidth = maxDimension;
+        }
+        return Bitmap.createScaledBitmap(bitmap, resizedWidth, resizedHeight, false);
+    }
+
+    private void callCloudVision(final Bitmap bitmap) throws IOException {
+        mImageDetails.setText("Loading...");
+
+        // Do the real work in an async task, because we need to use the network anyway
+        new AsyncTask<Object, Void, String>() {
+            @Override
+            protected String doInBackground(Object... params) {
+                try {
+                    HttpTransport httpTransport = AndroidHttp.newCompatibleTransport();
+                    JsonFactory jsonFactory = GsonFactory.getDefaultInstance();
+
+                    VisionRequestInitializer requestInitializer =
+                            new VisionRequestInitializer(CLOUD_VISION_API_KEY) {
+                                /**
+                                 * We override this so we can inject important identifying fields into the HTTP
+                                 * headers. This enables use of a restricted cloud platform API key.
+                                 */
+                                @Override
+                                protected void initializeVisionRequest(VisionRequest<?> visionRequest)
+                                        throws IOException {
+                                    super.initializeVisionRequest(visionRequest);
+
+                                    String packageName = getPackageName();
+                                    visionRequest.getRequestHeaders().set(ANDROID_PACKAGE_HEADER, packageName);
+
+                                    String sig = PackageManagerUtils.getSignature(getPackageManager(), packageName);
+
+                                    visionRequest.getRequestHeaders().set(ANDROID_CERT_HEADER, sig);
+                                }
+                            };
+
+                    Vision.Builder builder = new Vision.Builder(httpTransport, jsonFactory, null);
+                    builder.setVisionRequestInitializer(requestInitializer);
+
+                    Vision vision = builder.build();
+
+                    BatchAnnotateImagesRequest batchAnnotateImagesRequest =
+                            new BatchAnnotateImagesRequest();
+                    batchAnnotateImagesRequest.setRequests(new ArrayList<AnnotateImageRequest>() {{
+                        AnnotateImageRequest annotateImageRequest = new AnnotateImageRequest();
+
+                        // Add the image
+                        Image base64EncodedImage = new Image();
+                        // Convert the bitmap to a JPEG
+                        // Just in case it's a format that Android understands but Cloud Vision
+                        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, byteArrayOutputStream);
+                        byte[] imageBytes = byteArrayOutputStream.toByteArray();
+
+                        // Base64 encode the JPEG
+                        base64EncodedImage.encodeContent(imageBytes);
+                        annotateImageRequest.setImage(base64EncodedImage);
+
+                        // add the features we want
+                        annotateImageRequest.setFeatures(new ArrayList<Feature>() {{
+                            Feature labelDetection = new Feature();
+                            labelDetection.setType("LABEL_DETECTION");
+                            labelDetection.setMaxResults(5);
+                            add(labelDetection);
+                        }});
+
+                        // Add the list of one thing to the request
+                        add(annotateImageRequest);
+                    }});
+
+                    Vision.Images.Annotate annotateRequest =
+                            vision.images().annotate(batchAnnotateImagesRequest);
+                    // Due to a bug: requests to Vision API containing large images fail when GZipped.
+                    annotateRequest.setDisableGZipContent(true);
+                    Log.d(TAG, "created Cloud Vision request object, sending request");
+
+                    BatchAnnotateImagesResponse response = annotateRequest.execute();
+                    return convertResponseToString(response);
+
+                } catch (GoogleJsonResponseException e) {
+                    Log.d(TAG, "failed to make API request because " + e.getContent());
+                } catch (IOException e) {
+                    Log.d(TAG, "failed to make API request because of other IOException " +
+                            e.getMessage());
+                }
+                return "Cloud Vision API request failed. Check logs for details.";
+            }
+
+            protected void onPostExecute(String result) {
+                mImageDetails.setText(result);
+            }
+        }.execute();
+    }
+
+    private String convertResponseToString(BatchAnnotateImagesResponse response) {
+        String message = "I found these things:\n\n";
+
+        List<EntityAnnotation> labels = response.getResponses().get(0).getLabelAnnotations();
+        if (labels != null) {
+            for (EntityAnnotation label : labels) {
+                message += String.format(Locale.US, "%.3f: %s", label.getScore(), label.getDescription());
+                message += "\n";
+            }
+        } else {
+            message += "nothing";
+        }
+
+        return message;
     }
 
 }
