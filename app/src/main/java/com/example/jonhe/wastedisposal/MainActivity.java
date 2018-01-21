@@ -42,6 +42,19 @@ import java.util.List;
 
 import static android.os.Environment.getExternalStoragePublicDirectory;
 
+import com.google.cloud.bigquery.BigQuery;
+import com.google.cloud.bigquery.BigQueryOptions;
+import com.google.cloud.bigquery.FieldValueList;
+import com.google.cloud.bigquery.Job;
+import com.google.cloud.bigquery.JobId;
+import com.google.cloud.bigquery.JobInfo;
+import com.google.cloud.bigquery.QueryJobConfiguration;
+import com.google.cloud.bigquery.QueryResponse;
+import com.google.cloud.bigquery.QueryResult;
+import java.util.UUID;
+
+
+
 public class MainActivity extends Activity {
 
     private Button takePictureButton;
